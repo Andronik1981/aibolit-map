@@ -3,23 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Карта 2GIS   —  Aibolit</title>
-  <!-- Подключаем 2GIS JS API -->
-  <script src="https://maps.api.2gis.ru/2.0/loader.js?pkg=full"></script> :contentReference[oaicite:0]{index=0}
+  <title>Карта 2GIS — Aibolit</title>
+  <script src="https://maps.api.2gis.ru/2.0/loader.js?pkg=full"></script>
   <style>
-    /* карта займёт весь экран WebApp-а */
     html, body, #map { margin:0; padding:0; width:100%; height:100vh; }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <script>
-    // Когда API загрузится
     DG.then(function() {
-      // Парсим параметры из URL: markers и center
       const params = new URLSearchParams(window.location.search);
-      const centerParam = params.get('center');       // "lat,lon"
-      const markersParam = params.get('markers');     // JSON-строка с массивом объектов
+      const centerParam = params.get('center') || '0,0';
+      const markersParam = params.get('markers') || '[]';
 
       const [lat, lon] = centerParam.split(',').map(Number);
       const map = DG.map('map', { center: [lat, lon], zoom: 14 });
@@ -27,14 +23,14 @@
       let markers = [];
       try {
         markers = JSON.parse(decodeURIComponent(markersParam));
-      } catch (e) { console.error('Invalid markers:', e); }
+      } catch (e) {
+        console.error('Invalid markers', e);
+      }
 
-      // Для каждого маркера: { lat:…, lon:…, title:… }
       markers.forEach(m => {
         DG.marker([m.lat, m.lon])
           .addTo(map)
-          .bindPopup(`<b>${m.title}</b>`)
-          .openPopup();
+          .bindPopup(`<b>${m.title}</b>`);
       });
     });
   </script>
