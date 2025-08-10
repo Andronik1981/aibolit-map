@@ -10,29 +10,52 @@
   </style>
 </head>
 <body>
-  <div id="map"></div>
-  <script>
-    DG.then(function() {
-      const params = new URLSearchParams(window.location.search);
-      const centerParam = params.get('center') || '0,0';
-      const markersParam = params.get('markers') || '[]';
+<div id="map"></div>
+<script>
+DG.then(function () {
+  const params = new URLSearchParams(window.location.search);
+  const centerParam  = params.get('center');     // "lat,lon"
+  const markersParam = params.get('markers');    // URL-encoded JSON
 
-      const [lat, lon] = centerParam.split(',').map(Number);
-      const map = DG.map('map', { center: [lat, lon], zoom: 14 });
+  // 1) Центр: если не пришёл, ставим дефолт (Москва)
+  let center = [55.751244, 37.618423];
+  if (centerParam && centerParam.includes(',')) {
+    const [lat, lon] = centerParam.split(',').map(Number);
+    if (isFinite(lat) && isFinite(lon)) center = [lat, lon];
+  }
 
-      let markers = [];
-      try {
-        markers = JSON.parse(decodeURIComponent(markersParam));
-      } catch (e) {
-        console.error('Invalid markers', e);
-      }
+  const map = DG.map('map', { center, zoom: 13 });
 
-      markers.forEach(m => {
-        DG.marker([m.lat, m.lon])
-          .addTo(map)
-          .bindPopup(`<b>${m.title}</b>`);
-      });
-    });
-  </script>
+  // 2) Маркеры
+  let markers = [];
+  if (markersParam) {
+    try {
+      markers = JSON.parse(decodeURIComponent(markersParam));
+      if (!Array.isArray(markers)) markers = [];
+    } catch (e) {
+      console.error('Invalid markers:', e);
+      markers = [];
+    }
+  }
+
+  const group = DG.featureGroup().addTo(map);
+
+  // Опционально: отметим центр пользователя
+  DG.circleMarker(center, { radius: 6 }).addTo(group).bindPopup('Вы здесь');
+
+  markers.forEach(m => {
+    if (typeof m !== 'object') return;
+    const lat = Number(m.lat), lon = Number(m.lon);
+    if (!isFinite(lat) || !isFinite(lon)) return;
+
+    DG.marker([lat, lon]).addTo(group).bindPopup(`<b>${m.title ?? 'Объект'}</b>`);
+  });
+
+  // 3) Автоподгонка масштаба
+  if (group.getLayers().length > 1) {
+    map.fitBounds(group.getBounds(), { padding: [30, 30] });
+  }
+});
+</script>
 </body>
 </html>
