@@ -3,12 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Айболит — карта рядом</title>
+  <title>Айболит — карта</title>
 
-  <!-- Telegram WebApp API (опционально; используем для темы) -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <!-- Leaflet (без ключей, открытые OSM тайлы) -->
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -22,197 +20,81 @@
   ></script>
 
   <style>
-    :root {
-      --bg: #ffffff;
-      --fg: #111111;
-      --muted: #6b7280;
-      --accent: #0ea5e9;
-      --chip: #eef2ff;
-      --chip-fg: #3730a3;
-    }
-    html, body {
-      height: 100%;
-      margin: 0;
-      background: var(--bg);
-      color: var(--fg);
+    html, body { height: 100%; margin: 0; }
+    body {
       font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: #fff;
     }
-    #app {
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-      height: 100%;
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; left: 12px; right: 12px; bottom: 12px;
+      display: grid; gap: 8px;
     }
-    header {
-      padding: 12px 16px;
-      border-bottom: 1px solid rgba(0,0,0,.06);
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    .btn {
+      appearance: none; border: none; border-radius: 10px;
+      padding: 12px 14px; font-weight: 600; cursor: pointer;
+      background: #0ea5e9; color: #fff;
     }
-    header .chip {
-      background: var(--chip);
-      color: var(--chip-fg);
-      padding: 4px 8px;
-      border-radius: 999px;
-      font-weight: 600;
-      font-size: 12px;
-    }
-    #map { width: 100%; height: 100%; }
-    footer {
-      padding: 10px 12px;
-      color: var(--muted);
-      border-top: 1px solid rgba(0,0,0,.06);
-      font-size: 12px;
-    }
-    .popup h3 {
-      margin: 0 0 4px 0;
-      font-size: 15px;
-    }
-    .popup p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .legend {
-      display: flex; gap: 8px; align-items: center;
-      font-size: 12px; color: var(--muted);
-    }
-    .dot {
-      width: 10px; height: 10px; border-radius: 50%;
-      display: inline-block;
-    }
-    .dot.user { background: #22c55e; }
-    .dot.place { background: #ef4444; }
+    .btn.secondary { background: #22c55e; }
   </style>
 </head>
 <body>
-  <div id="app">
-    <header>
-      <span class="chip">Айболит</span>
-      <div class="legend">
-        <span class="dot user"></span> вы
-        <span class="dot place"></span> организации
-      </div>
-    </header>
-    <div id="map"></div>
-    <footer>Если карта не двигается — обновите страницу.</footer>
+  <div id="map"></div>
+  <div class="panel">
+    <button id="btnLab" class="btn">Найти лаборатории</button>
+    <button id="btnClinic" class="btn secondary">Найти клиники</button>
   </div>
 
   <script>
-    // --- Тема из Telegram WebApp (светлая/тёмная)
-    (function applyTgTheme(){
-      try {
-        const tg = window.Telegram?.WebApp;
-        if (!tg) return;
-        tg.expand(); // во весь экран
-        const theme = tg.colorScheme; // 'light' | 'dark'
-        const p = tg.themeParams || {};
-        if (theme === 'dark') {
-          document.documentElement.style.setProperty('--bg', p.bg_color || '#0f0f0f');
-          document.documentElement.style.setProperty('--fg', p.text_color || '#e5e7eb');
-          document.documentElement.style.setProperty('--muted', p.hint_color || '#9ca3af');
-          document.documentElement.style.setProperty('--chip', '#1f2937');
-          document.documentElement.style.setProperty('--chip-fg', '#c7d2fe');
-        }
-      } catch(e) {}
+    const tg = window.Telegram?.WebApp;
+    if (tg) tg.expand();
+
+    let userPos = null;
+    const map = L.map('map', { center: [55.751244, 37.618423], zoom: 12 });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    const userIcon = L.divIcon({
+      className: 'user-marker',
+      html: '<div style="width:14px;height:14px;background:#22c55e;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 2px rgba(34,197,94,.6)"></div>',
+      iconSize: [14,14], iconAnchor: [7,7]
+    });
+
+    function setUserPos(lat, lon) {
+      userPos = { lat, lon };
+      L.marker([lat, lon], { icon: userIcon }).addTo(map);
+      map.setView([lat, lon], 14);
+    }
+
+    // 1) Центрируем по геолокации пользователя
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setUserPos(pos.coords.latitude, pos.coords.longitude),
+        () => {}, { enableHighAccuracy: true, timeout: 8000 }
+      );
+    }
+
+    // 2) Если в URL пришёл center=lat,lon — используем его как стартовую точку
+    (function applyCenterFromURL(){
+      const sp = new URLSearchParams(location.search);
+      const c = (sp.get('center')||'').split(',').map(Number);
+      if (c.length === 2 && !c.some(isNaN)) setUserPos(c[0], c[1]);
     })();
 
-    // --- Парсинг параметров: center=lat,lon & markers=[{lat,lon,title,address},...]
-    function parseParams() {
-      const sp = new URLSearchParams(window.location.search);
-      const center = (sp.get('center') || '').split(',').map(Number);
-      let markers = [];
-      try {
-        const raw = sp.get('markers');
-        if (raw) {
-          markers = JSON.parse(decodeURIComponent(raw));
-        }
-      } catch(e) {
-        console.warn('Bad markers JSON', e);
-      }
-      return {
-        center: (center.length === 2 && !center.some(isNaN)) ? center : null,
-        markers: Array.isArray(markers) ? markers : [],
-      };
+    function sendAndClose(mode) {
+      // Если геолокация ещё не определилась — берём центр карты
+      const center = map.getCenter();
+      const lat = userPos?.lat ?? center.lat;
+      const lon = userPos?.lon ?? center.lng;
+
+      const payload = { lat, lon, mode };
+      try { tg?.sendData(JSON.stringify(payload)); } catch(e) {}
+      try { tg?.close(); } catch(e) {}
     }
 
-    // --- Инициализация карты
-    function initMap() {
-      const { center, markers } = parseParams();
-
-      // дефолт: Москва-центр, если center не пришёл
-      const defaultCenter = [55.751244, 37.618423];
-      const map = L.map('map', {
-        center: center || defaultCenter,
-        zoom: center ? 14 : 11,
-        zoomControl: true
-      });
-
-      // OSM тайлы
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap',
-      }).addTo(map);
-
-      // Кастомные иконки
-      const userIcon = L.divIcon({
-        className: 'user-marker',
-        html: '<div style="width:14px;height:14px;background:#22c55e;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 2px rgba(34,197,94,.6)"></div>',
-        iconSize: [14, 14],
-        iconAnchor: [7, 7],
-      });
-      const placeIcon = L.divIcon({
-        className: 'place-marker',
-        html: '<div style="width:14px;height:14px;background:#ef4444;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 2px rgba(239,68,68,.6)"></div>',
-        iconSize: [14, 14],
-        iconAnchor: [7, 7],
-      });
-
-      // Маркер центра (пользователь)
-      if (center) {
-        L.marker(center, { icon: userIcon }).addTo(map);
-      }
-
-      // Маркеры организаций
-      const bounds = L.latLngBounds([]);
-      if (center) bounds.extend(center);
-
-      markers.forEach((m) => {
-        const lat = Number(m.lat);
-        const lon = Number(m.lon);
-        if (isNaN(lat) || isNaN(lon)) return;
-
-        const name = m.title || m.name || 'Организация';
-        const addr = m.address || '';
-        const html = `<div class="popup"><h3>${escapeHtml(name)}</h3>${addr ? `<p>${escapeHtml(addr)}</p>` : ''}</div>`;
-
-        const marker = L.marker([lat, lon], { icon: placeIcon }).addTo(map);
-        marker.bindPopup(html);
-        bounds.extend([lat, lon]);
-      });
-
-      // Подгоняем рамку под все маркеры
-      if (bounds.isValid()) {
-        map.fitBounds(bounds.pad(0.2));
-      }
-
-      // Геолокация как fallback, если center не пришёл
-      if (!center && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition((pos) => {
-          const c = [pos.coords.latitude, pos.coords.longitude];
-          L.marker(c, { icon: userIcon }).addTo(map);
-          map.setView(c, 14);
-        });
-      }
-    }
-
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-      }[c]));
-    }
-
-    document.addEventListener('DOMContentLoaded', initMap);
+    document.getElementById('btnLab').addEventListener('click', () => sendAndClose('lab'));
+    document.getElementById('btnClinic').addEventListener('click', () => sendAndClose('clinic'));
   </script>
 </body>
 </html>
