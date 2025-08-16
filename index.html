@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Айболит — карта</title>
 
-  <!-- Telegram WebApp -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <!-- Leaflet (без ключей) -->
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -25,45 +23,22 @@
     :root { --bg:#fff; --fg:#111; --hint:#6b7280; }
     html, body { height:100%; margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     #map { position:absolute; inset:0; }
-    .panel {
-      position:absolute; left:12px; right:12px; bottom:12px;
-      display:grid; gap:8px;
-    }
-    .btn {
-      appearance:none; border:none; border-radius:10px;
-      padding:12px 14px; font-weight:600; cursor:pointer; color:#fff; background:#0ea5e9;
-    }
-    .btn.secondary { background:#22c55e; }
     .hint {
       position:absolute; left:12px; right:12px; top:12px;
       padding:10px 12px; border-radius:8px;
-      background:rgba(0,0,0,.06); color:var(--fg);
-      font-size:13px;
+      background:rgba(0,0,0,.06); color:var(--fg); font-size:13px;
     }
-    .toolbar {
-      position:absolute; right:12px; top:12px; display:flex; gap:8px;
-    }
-    .tbtn { border:none; border-radius:8px; padding:8px 10px; background:#f3f4f6; cursor:pointer; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-
-  <!-- Подсказки / кнопки появляются только в режиме "сбор координат" -->
   <div class="hint" id="hint" style="display:none;"></div>
-  <div class="panel" id="panel" style="display:none;">
-    <button id="btnLab" class="btn">Найти лаборатории</button>
-    <button id="btnClinic" class="btn secondary">Найти клиники</button>
-  </div>
-  <div class="toolbar" id="toolbar" style="display:none;">
-    <button id="btnClose" class="tbtn">Закрыть</button>
-  </div>
 
   <script>
     const tg = window.Telegram?.WebApp;
     try { tg?.expand(); } catch(e) {}
 
-    // Тёмная тема Telegram
+    // Тёмная тема
     try {
       if (tg?.colorScheme === 'dark') {
         document.documentElement.style.setProperty('--bg', '#0f0f0f');
@@ -87,82 +62,43 @@
 
     function esc(s){ return String(s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])) }
 
-    // Разбор параметров URL
+    // Параметры из URL
     const sp = new URLSearchParams(location.search);
-    const mode = sp.get('mode') || 'lab';
     const centerParam = (sp.get('center') || '').split(',').map(Number);
+
     let markers = [];
     try {
       const raw = sp.get('markers');
       if (raw) markers = JSON.parse(decodeURIComponent(raw));
     } catch(e) { console.warn('Bad markers JSON', e); }
 
-    const hasMarkers = Array.isArray(markers) && markers.length > 0;
+    const bounds = L.latLngBounds([]);
 
-    // Если есть маркеры — это режим "показ карты": рисуем и выходим
-    if (hasMarkers) {
-      const bounds = L.latLngBounds([]);
-      // центр пользователя, если пришёл
-      if (centerParam.length === 2 && !centerParam.some(isNaN)) {
-        L.marker(centerParam, { icon:userIcon }).addTo(map);
-        bounds.extend(centerParam);
-      }
-      // маркеры организаций
-      markers.forEach(m => {
-        const lat = Number(m.lat), lon = Number(m.lon);
-        if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          const name = esc(m.title || m.name || 'Организация');
-          const addr = esc(m.address || '');
-          L.marker([lat, lon], { icon: placeIcon })
-            .addTo(map)
-            .bindPopup(`<b>${name}</b>${addr ? `<div style="margin-top:4px;color:#6b7280;font-size:12px">${addr}</div>`:''}`);
-          bounds.extend([lat, lon]);
-        }
-      });
-      if (bounds.isValid()) map.fitBounds(bounds.pad(0.2));
-    } else {
-      // Режим "сбор координат"
+    // Центр пользователя
+    if (centerParam.length === 2 && !centerParam.some(isNaN)) {
+      L.marker(centerParam, { icon:userIcon }).addTo(map);
+      bounds.extend(centerParam);
+    }
+
+    // Маркеры организаций
+    (markers || []).forEach(m => {
+      const lat = Number(m.lat), lon = Number(m.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      const name = esc(m.title || m.name || 'Организация');
+      const addr = esc(m.address || '');
+      L.marker([lat, lon], { icon: placeIcon })
+        .addTo(map)
+        .bindPopup(`<b>${name}</b>${addr ? `<div style="margin-top:4px;color:#6b7280;font-size:12px">${addr}</div>`:''}`);
+      bounds.extend([lat, lon]);
+    });
+
+    if (bounds.isValid()) map.fitBounds(bounds.pad(0.2)); else map.setView([55.751244, 37.618423], 12);
+
+    // Подсказка, если маркеров нет
+    if (!bounds.isValid()) {
       const hint = document.getElementById('hint');
-      const panel = document.getElementById('panel');
-      const toolbar = document.getElementById('toolbar');
-      hint.style.display = panel.style.display = toolbar.style.display = 'block';
-
-      hint.textContent = 'Разрешите доступ к геолокации и выберите тип поиска ниже. После отправки координат вернитесь в чат — там появится карта с организациями и список.';
-
-      let userPos = null;
-      function setUserPos(lat, lon) {
-        userPos = { lat, lon };
-        L.marker([lat, lon], { icon:userIcon }).addTo(map);
-        map.setView([lat, lon], 14);
-      }
-
-      // Пытаемся получить геолокацию (пользователь увидит системный запрос)
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          pos => setUserPos(pos.coords.latitude, pos.coords.longitude),
-          err => {
-            // если отказ — оставим центр по умолчанию, пользователь может подвинуть карту
-            console.warn('geolocation error', err);
-          },
-          { enableHighAccuracy:true, timeout:10000 }
-        );
-      }
-
-      function send(modeVal){
-        const c = map.getCenter();
-        const lat = userPos?.lat ?? c.lat;
-        const lon = userPos?.lon ?? c.lng;
-        try {
-          tg?.sendData(JSON.stringify({ lat, lon, mode: modeVal }));
-          // НЕ закрываем автоматически — оставляем пользователю выбор
-          hint.textContent = 'Координаты отправлены. Перейдите в чат — появится карта с организациями и список.';
-          if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-        } catch(e){}
-      }
-
-      document.getElementById('btnLab').addEventListener('click', ()=>send('lab'));
-      document.getElementById('btnClinic').addEventListener('click', ()=>send('clinic'));
-      document.getElementById('btnClose').addEventListener('click', ()=>{ try{ tg?.close(); }catch(e){} });
+      hint.textContent = 'Маркеров не передано. Откройте карту из чата повторно.';
+      hint.style.display = 'block';
     }
   </script>
 </body>
