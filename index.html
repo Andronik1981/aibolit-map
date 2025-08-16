@@ -21,35 +21,26 @@
 
   <style>
     html, body { height: 100%; margin: 0; }
-    body {
-      font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background: #fff;
-    }
+    body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     #map { position: absolute; inset: 0; }
-    .panel {
-      position: absolute; left: 12px; right: 12px; bottom: 12px;
-      display: grid; gap: 8px;
+    .hint {
+      position: absolute; left: 12px; right: 12px; top: 12px;
+      padding: 10px 12px; background: rgba(0,0,0,.6); color:#fff; border-radius: 8px;
     }
-    .btn {
-      appearance: none; border: none; border-radius: 10px;
-      padding: 12px 14px; font-weight: 600; cursor: pointer;
-      background: #0ea5e9; color: #fff;
-    }
-    .btn.secondary { background: #22c55e; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="panel">
-    <button id="btnLab" class="btn">Найти лаборатории</button>
-    <button id="btnClinic" class="btn secondary">Найти клиники</button>
-  </div>
+  <div class="hint" id="hint">Определяем вашу локацию…</div>
 
   <script>
     const tg = window.Telegram?.WebApp;
     if (tg) tg.expand();
 
-    let userPos = null;
+    // читаем режим из URL (?mode=lab|clinic), по умолчанию lab
+    const sp = new URLSearchParams(location.search);
+    const mode = sp.get('mode') || 'lab';
+
     const map = L.map('map', { center: [55.751244, 37.618423], zoom: 12 });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '&copy; OpenStreetMap'
@@ -61,40 +52,34 @@
       iconSize: [14,14], iconAnchor: [7,7]
     });
 
-    function setUserPos(lat, lon) {
-      userPos = { lat, lon };
-      L.marker([lat, lon], { icon: userIcon }).addTo(map);
-      map.setView([lat, lon], 14);
-    }
-
-    // 1) Центрируем по геолокации пользователя
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => setUserPos(pos.coords.latitude, pos.coords.longitude),
-        () => {}, { enableHighAccuracy: true, timeout: 8000 }
-      );
-    }
-
-    // 2) Если в URL пришёл center=lat,lon — используем его как стартовую точку
-    (function applyCenterFromURL(){
-      const sp = new URLSearchParams(location.search);
-      const c = (sp.get('center')||'').split(',').map(Number);
-      if (c.length === 2 && !c.some(isNaN)) setUserPos(c[0], c[1]);
-    })();
-
-    function sendAndClose(mode) {
-      // Если геолокация ещё не определилась — берём центр карты
-      const center = map.getCenter();
-      const lat = userPos?.lat ?? center.lat;
-      const lon = userPos?.lon ?? center.lng;
-
-      const payload = { lat, lon, mode };
-      try { tg?.sendData(JSON.stringify(payload)); } catch(e) {}
+    function sendAndClose(lat, lon) {
+      try { tg?.sendData(JSON.stringify({ lat, lon, mode })); } catch(e) {}
       try { tg?.close(); } catch(e) {}
     }
 
-    document.getElementById('btnLab').addEventListener('click', () => sendAndClose('lab'));
-    document.getElementById('btnClinic').addEventListener('click', () => sendAndClose('clinic'));
+    function setUserPos(lat, lon) {
+      L.marker([lat, lon], { icon: userIcon }).addTo(map);
+      map.setView([lat, lon], 14);
+      const hint = document.getElementById('hint');
+      hint.textContent = 'Отправляю координаты…';
+      // сразу отправляем координаты в бота и закрываем WebApp
+      sendAndClose(lat, lon);
+    }
+
+    // 1) Геолокация пользователя
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setUserPos(pos.coords.latitude, pos.coords.longitude),
+        () => {
+          const c = map.getCenter();
+          setUserPos(c.lat, c.lng);
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    } else {
+      const c = map.getCenter();
+      setUserPos(c.lat, c.lng);
+    }
   </script>
 </body>
 </html>
