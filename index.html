@@ -13,7 +13,7 @@
   <style>
     html, body, #map { height: 100%; margin: 0; }
 
-    /* Внешний вид перманентных подписей */
+    /* Вид перманентных подписей */
     .place-label {
       background: rgba(255,255,255,0.95);
       color: #111;
@@ -23,51 +23,24 @@
       font: 13px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       box-shadow: 0 1px 2px rgba(0,0,0,0.15);
       white-space: nowrap;
-      max-width: 220px;         /* ограничим ширину */
+      max-width: 220px;
       overflow: hidden;
-      text-overflow: ellipsis;  /* многоточие */
-      pointer-events: none;     /* не мешаем кликам по карте */
+      text-overflow: ellipsis;
+      pointer-events: none; /* не мешаем кликам */
     }
-    .leaflet-tooltip.place-label:before { display: none; } /* убираем «хвостик» */
-
-    /* Панель управления */
-    .controls {
-      position: absolute; z-index: 1000; top: 10px; left: 10px;
-      background: rgba(255,255,255,0.98); padding: 8px 10px; border-radius: 10px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-      font: 13px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      display: grid; gap: 6px;
-    }
-    .controls label { display: flex; align-items: center; gap: 6px; user-select: none; }
-    .controls .row { display: flex; gap: 6px; align-items: center; }
-    .muted { color: #666; }
+    .leaflet-tooltip.place-label:before { display: none; }
     .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
-  <div class="controls">
-    <label>
-      <input type="checkbox" id="toggleLabels" checked />
-      Показывать названия учреждений
-    </label>
-    <div class="row">
-      <span class="muted">Мин. зум для подписей:</span>
-      <select id="minZoom">
-        <option value="14">14</option>
-        <option value="15" selected>15</option>
-        <option value="16">16</option>
-      </select>
-    </div>
-    <div class="row">
-      <span class="muted">Макс. длина:</span>
-      <input id="maxLen" type="number" min="8" max="80" value="28" style="width:64px" />
-    </div>
-  </div>
-
   <script>
-    // ------- разбор параметров URL -------
+    /* ====== ПАРАМЕТРЫ (можно подстроить) ====== */
+    const MAX_LEN       = 28; // длина подписи (остаток — «…»)
+    const DEFAULT_ZOOM  = 14; // масштаб, если маркер один
+
+    /* ============== Утилиты и ввод из URL ============== */
     function getParam(name) { const p = new URLSearchParams(location.search); return p.get(name); }
     function parseCenter(val) {
       if (!val) return null;
@@ -89,82 +62,76 @@
       } catch(e) { console.warn("Не удалось распарсить markers:", e); }
       return [];
     }
+    const escapeHtml = (s) => String(s)
+      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#39;");
+    const ellipsis = (s, n) => s && s.length > n ? (s.slice(0, n-1) + "…") : (s || "");
 
     const center  = parseCenter(getParam("center")) || [55.751244, 37.618423];
     const markers = parseMarkers(getParam("markers"));
 
-    // --- Настройки подписей по умолчанию (можно менять в UI) ---
-    let MIN_ZOOM = 15;
-    let MAX_LEN  = 28;
-
-    // --- Утилиты ---
-    const escapeHtml = (s) => String(s)
-      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
-      .replaceAll('"',"&quot;").replaceAll("'","&#39;");
-    const ellipsis = (s, n) => s.length > n ? (s.slice(0, n-1) + "…") : s;
-
+    /* ============================ Карта 2ГИС ============================ */
     DG.then(function () {
-      const map = DG.map('map', { center: center, zoom: markers.length > 1 ? 13 : 14 });
+      const map   = DG.map('map', { center: center, zoom: markers.length > 1 ? 13 : DEFAULT_ZOOM });
       const group = DG.featureGroup().addTo(map);
 
-      // ссылки на { marker, tooltipInstance, dom, fullTitle, shortTitle }
+      // item: { marker, fullTitle, tooltipInst, dom, shortTitle }
       const labelItems = [];
 
-      // Создаём маркеры и подписи
+      // 1) Маркеры + popup + постоянная подпись
       markers.forEach((m) => {
         const fullTitle  = m.title || "Организация";
         const marker     = DG.marker([m.lat, m.lon], { title: fullTitle }).addTo(group);
+        marker.bindPopup(
+          `<b>${escapeHtml(fullTitle)}</b><br/>Координаты: ${m.lat.toFixed(6)}, ${m.lon.toFixed(6)}`
+        );
+
         const shortTitle = ellipsis(fullTitle, MAX_LEN);
-
-        // popup с ПОЛНЫМ названием
-        marker.bindPopup(`<b>${escapeHtml(fullTitle)}</b><br/>Координаты: ${m.lat.toFixed(6)}, ${m.lon.toFixed(6)}`);
-
-        // перманентная подпись; покажем/скроем ниже по правилам
-        const tt = marker.bindTooltip(shortTitle, {
-          permanent: true, direction: 'top', offset: [0, -10], className: 'place-label'
+        marker.bindTooltip(shortTitle, {
+          permanent: true,
+          direction: 'top',
+          offset: [0, -10],
+          className: 'place-label'
         });
 
-        labelItems.push({ marker, tooltip: tt, dom: null, fullTitle, shortTitle });
+        labelItems.push({ marker, fullTitle, tooltipInst: null, dom: null, shortTitle });
       });
 
-      // Подписать/пересчитать коллизии
+      if (markers.length > 1) {
+        map.fitBounds(group.getBounds().pad(0.2));
+      }
+
+      // 2) Получаем инстансы тултипов и DOM-контейнеры
+      function updateDomRefs() {
+        labelItems.forEach(item => {
+          try {
+            if (!item.marker.getTooltip()) item.marker.openTooltip();
+            const tt = item.marker.getTooltip ? item.marker.getTooltip() : item.marker._tooltip;
+            item.tooltipInst = tt || null;
+            item.dom = tt && tt._container ? tt._container : null;
+            if (item.dom) item.dom.classList.remove('hidden'); // всегда показываем (дальше только анти-коллизии)
+          } catch(e) {
+            item.tooltipInst = null; item.dom = null;
+          }
+        });
+      }
+
+      // 3) Применяем длину (если будешь менять MAX_LEN)
       function refreshShortTitles() {
         labelItems.forEach(item => {
           item.shortTitle = ellipsis(item.fullTitle, MAX_LEN);
-          try { item.tooltip.setContent(item.shortTitle); } catch(e){}
+          try { item.tooltipInst && item.tooltipInst.setContent(item.shortTitle); } catch(e){}
         });
       }
 
-      function updateDomRefs() {
-        // после открытия tooltip у него появляется DOM-элемент
-        labelItems.forEach(item => {
-          try {
-            // tooltip может быть не открыт: откроем, если надо отображать
-            if (!map.hasLayer(item.tooltip._tooltip)) item.tooltip.openTooltip();
-            item.dom = item.tooltip._tooltip?._container || null;
-          } catch(e) { item.dom = null; }
-        });
-      }
-
-      // Простая анти-коллизия: прячем подписи, прямоугольники которых пересекаются
+      // 4) Простая анти-коллизия (прячем пересекающиеся ярлыки)
       function resolveCollisions() {
-        const zoom = map.getZoom();
-        const showLabels = document.getElementById('toggleLabels').checked;
-
-        // Показ по условиям (зум и переключатель)
-        const shouldShow = showLabels && (zoom >= MIN_ZOOM);
-
-        labelItems.forEach(item => {
-          if (!item.dom) return;
-          item.dom.classList.toggle('hidden', !shouldShow);
-        });
-        if (!shouldShow) return; // дальше не считаем пересечения
-
-        // Собираем видимые и сортируем (короче подписи — выше приоритет)
         const visibles = labelItems
           .map(x => ({...x, rect: x.dom?.getBoundingClientRect()}))
-          .filter(x => x.rect && !x.dom.classList.contains('hidden'))
-          .sort((a,b) => a.shortTitle.length - b.shortTitle.length);
+          .filter(x => x.rect);
+
+        // короткие подписи — приоритетнее (меньше закрывают карту)
+        visibles.sort((a,b) => a.shortTitle.length - b.shortTitle.length);
 
         const taken = [];
         for (const it of visibles) {
@@ -176,7 +143,7 @@
             }
           }
           if (overlap) {
-            it.dom.classList.add('hidden');  // прячем пересекающуюся
+            it.dom.classList.add('hidden');
           } else {
             it.dom.classList.remove('hidden');
             taken.push(r);
@@ -190,30 +157,10 @@
         resolveCollisions();
       }
 
-      // Первичная отрисовка
-      if (markers.length > 1) map.fitBounds(group.getBounds().pad(0.2));
-      // Дадим карте дорисоваться, затем сделаем раскладку
-      setTimeout(fullRelayout, 100);
-
-      // Перелайаут при движении/зуме
+      // Первичная раскладка
+      setTimeout(fullRelayout, 120);
+      // Пересчёт при движении/зуме
       map.on('zoomend moveend', () => setTimeout(fullRelayout, 0));
-
-      // --- UI-переключатели ---
-      const toggle = document.getElementById('toggleLabels');
-      const minZoomSel = document.getElementById('minZoom');
-      const maxLenInp  = document.getElementById('maxLen');
-
-      toggle.addEventListener('change', fullRelayout);
-      minZoomSel.addEventListener('change', () => {
-        MIN_ZOOM = parseInt(minZoomSel.value, 10) || 15;
-        fullRelayout();
-      });
-      maxLenInp.addEventListener('change', () => {
-        const v = Math.max(8, Math.min(80, parseInt(maxLenInp.value, 10) || 28));
-        MAX_LEN = v;
-        maxLenInp.value = v;
-        fullRelayout();
-      });
     });
   </script>
 </body>
