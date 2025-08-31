@@ -13,7 +13,7 @@
   <style>
     html, body, #map { height: 100%; margin: 0; }
 
-    /* Вид перманентных подписей */
+    /* Вид постоянных подписей */
     .place-label {
       background: rgba(255,255,255,0.95);
       color: #111;
@@ -28,16 +28,15 @@
       text-overflow: ellipsis;
       pointer-events: none; /* не мешаем кликам */
     }
-    .leaflet-tooltip.place-label:before { display: none; }
-    .hidden { display: none !important; }
+    .leaflet-tooltip.place-label:before { display: none; } /* убираем «хвостик» */
   </style>
 </head>
 <body>
   <div id="map"></div>
 
   <script>
-    /* ====== ПАРАМЕТРЫ (можно подстроить) ====== */
-    const MAX_LEN       = 28; // длина подписи (остаток — «…»)
+    /* ====== ПАРАМЕТРЫ (правь по желанию) ====== */
+    const MAX_LEN       = 14; // длина подписи (остаток — «…»)
     const DEFAULT_ZOOM  = 14; // масштаб, если маркер один
 
     /* ============== Утилиты и ввод из URL ============== */
@@ -75,92 +74,29 @@
       const map   = DG.map('map', { center: center, zoom: markers.length > 1 ? 13 : DEFAULT_ZOOM });
       const group = DG.featureGroup().addTo(map);
 
-      // item: { marker, fullTitle, tooltipInst, dom, shortTitle }
-      const labelItems = [];
-
-      // 1) Маркеры + popup + постоянная подпись
       markers.forEach((m) => {
         const fullTitle  = m.title || "Организация";
-        const marker     = DG.marker([m.lat, m.lon], { title: fullTitle }).addTo(group);
+        const shortTitle = ellipsis(fullTitle, MAX_LEN);
+
+        const marker = DG.marker([m.lat, m.lon], { title: fullTitle }).addTo(group);
+
+        // Popup по клику — ПОЛНОЕ название
         marker.bindPopup(
           `<b>${escapeHtml(fullTitle)}</b><br/>Координаты: ${m.lat.toFixed(6)}, ${m.lon.toFixed(6)}`
         );
 
-        const shortTitle = ellipsis(fullTitle, MAX_LEN);
+        // Постоянная подпись над маркером — усечённая
         marker.bindTooltip(shortTitle, {
           permanent: true,
           direction: 'top',
           offset: [0, -10],
           className: 'place-label'
         });
-
-        labelItems.push({ marker, fullTitle, tooltipInst: null, dom: null, shortTitle });
       });
 
       if (markers.length > 1) {
         map.fitBounds(group.getBounds().pad(0.2));
       }
-
-      // 2) Получаем инстансы тултипов и DOM-контейнеры
-      function updateDomRefs() {
-        labelItems.forEach(item => {
-          try {
-            if (!item.marker.getTooltip()) item.marker.openTooltip();
-            const tt = item.marker.getTooltip ? item.marker.getTooltip() : item.marker._tooltip;
-            item.tooltipInst = tt || null;
-            item.dom = tt && tt._container ? tt._container : null;
-            if (item.dom) item.dom.classList.remove('hidden'); // всегда показываем (дальше только анти-коллизии)
-          } catch(e) {
-            item.tooltipInst = null; item.dom = null;
-          }
-        });
-      }
-
-      // 3) Применяем длину (если будешь менять MAX_LEN)
-      function refreshShortTitles() {
-        labelItems.forEach(item => {
-          item.shortTitle = ellipsis(item.fullTitle, MAX_LEN);
-          try { item.tooltipInst && item.tooltipInst.setContent(item.shortTitle); } catch(e){}
-        });
-      }
-
-      // 4) Простая анти-коллизия (прячем пересекающиеся ярлыки)
-      function resolveCollisions() {
-        const visibles = labelItems
-          .map(x => ({...x, rect: x.dom?.getBoundingClientRect()}))
-          .filter(x => x.rect);
-
-        // короткие подписи — приоритетнее (меньше закрывают карту)
-        visibles.sort((a,b) => a.shortTitle.length - b.shortTitle.length);
-
-        const taken = [];
-        for (const it of visibles) {
-          const r = it.rect;
-          let overlap = false;
-          for (const tr of taken) {
-            if (!(r.right < tr.left || r.left > tr.right || r.bottom < tr.top || r.top > tr.bottom)) {
-              overlap = true; break;
-            }
-          }
-          if (overlap) {
-            it.dom.classList.add('hidden');
-          } else {
-            it.dom.classList.remove('hidden');
-            taken.push(r);
-          }
-        }
-      }
-
-      function fullRelayout() {
-        refreshShortTitles();
-        updateDomRefs();
-        resolveCollisions();
-      }
-
-      // Первичная раскладка
-      setTimeout(fullRelayout, 120);
-      // Пересчёт при движении/зуме
-      map.on('zoomend moveend', () => setTimeout(fullRelayout, 0));
     });
   </script>
 </body>
