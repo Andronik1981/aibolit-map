@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Карта клиник и лабораторий</title>
 
+  <!-- ВАЖНО: стили для Leaflet, который использует 2ГИС SDK v2 -->
+  <link rel="stylesheet" href="https://maps.api.2gis.ru/2.0/leaflet.css" />
+
   <!-- 2ГИС Web SDK -->
   <script src="https://maps.api.2gis.ru/2.0/loader.js?pkg=full"></script>
 
@@ -20,6 +23,7 @@
       box-shadow: 0 1px 2px rgba(0,0,0,0.2);
       white-space: nowrap;
     }
+    /* убираем «хвостик» у тултипа */
     .leaflet-tooltip.place-label:before { display: none; }
 
     .controls {
@@ -76,7 +80,7 @@
           permanent: true, direction: 'top', offset: [0, -10], className: 'place-label'
         });
         tooltipRefs.push(tt);
-        marker.bindPopup(<b></b><br/>Координаты: , );
+        marker.bindPopup(`<b>${escapeHtml(m.title || "Организация")}</b><br/>Координаты: ${m.lat.toFixed(6)}, ${m.lon.toFixed(6)}`);
       });
 
       if (markers.length > 1) { map.fitBounds(group.getBounds().pad(0.2)); }
