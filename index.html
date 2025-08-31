@@ -5,34 +5,43 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Карта клиник и лабораторий</title>
 
-  <!-- ВАЖНО: стили для Leaflet, который использует 2ГИС SDK v2 -->
+  <!-- Стили для Leaflet (нужны 2ГИС SDK v2) -->
   <link rel="stylesheet" href="https://maps.api.2gis.ru/2.0/leaflet.css" />
-
   <!-- 2ГИС Web SDK -->
   <script src="https://maps.api.2gis.ru/2.0/loader.js?pkg=full"></script>
 
   <style>
     html, body, #map { height: 100%; margin: 0; }
+
+    /* Внешний вид перманентных подписей */
     .place-label {
-      background: rgba(255,255,255,0.9);
+      background: rgba(255,255,255,0.95);
       color: #111;
       border: 1px solid rgba(0,0,0,0.25);
       border-radius: 6px;
       padding: 2px 6px;
       font: 13px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.15);
       white-space: nowrap;
+      max-width: 220px;         /* ограничим ширину */
+      overflow: hidden;
+      text-overflow: ellipsis;  /* многоточие */
+      pointer-events: none;     /* не мешаем кликам по карте */
     }
-    /* убираем «хвостик» у тултипа */
-    .leaflet-tooltip.place-label:before { display: none; }
+    .leaflet-tooltip.place-label:before { display: none; } /* убираем «хвостик» */
 
+    /* Панель управления */
     .controls {
       position: absolute; z-index: 1000; top: 10px; left: 10px;
-      background: rgba(255,255,255,0.95); padding: 6px 8px; border-radius: 8px;
+      background: rgba(255,255,255,0.98); padding: 8px 10px; border-radius: 10px;
       box-shadow: 0 2px 6px rgba(0,0,0,0.15);
       font: 13px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      display: grid; gap: 6px;
     }
     .controls label { display: flex; align-items: center; gap: 6px; user-select: none; }
+    .controls .row { display: flex; gap: 6px; align-items: center; }
+    .muted { color: #666; }
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
@@ -43,9 +52,22 @@
       <input type="checkbox" id="toggleLabels" checked />
       Показывать названия учреждений
     </label>
+    <div class="row">
+      <span class="muted">Мин. зум для подписей:</span>
+      <select id="minZoom">
+        <option value="14">14</option>
+        <option value="15" selected>15</option>
+        <option value="16">16</option>
+      </select>
+    </div>
+    <div class="row">
+      <span class="muted">Макс. длина:</span>
+      <input id="maxLen" type="number" min="8" max="80" value="28" style="width:64px" />
+    </div>
   </div>
 
   <script>
+    // ------- разбор параметров URL -------
     function getParam(name) { const p = new URLSearchParams(location.search); return p.get(name); }
     function parseCenter(val) {
       if (!val) return null;
@@ -58,45 +80,140 @@
       try {
         const arr = JSON.parse(decodeURIComponent(val));
         if (Array.isArray(arr)) {
-          return arr.map(x => ({
-            lat: Number(x.lat), lon: Number(x.lon), title: String(x.title ?? "")
-          })).filter(x => isFinite(x.lat) && isFinite(x.lon));
+          return arr
+            .map(x => ({
+              lat: Number(x.lat), lon: Number(x.lon), title: String(x.title ?? "").trim()
+            }))
+            .filter(x => isFinite(x.lat) && isFinite(x.lon));
         }
       } catch(e) { console.warn("Не удалось распарсить markers:", e); }
       return [];
     }
 
-    const center = parseCenter(getParam("center")) || [55.751244, 37.618423];
+    const center  = parseCenter(getParam("center")) || [55.751244, 37.618423];
     const markers = parseMarkers(getParam("markers"));
 
-    DG.then(function () {
-      const map = DG.map('map', { center: center, zoom: markers.length > 1 ? 13 : 14, worldCopyJump: false });
-      const group = DG.featureGroup().addTo(map);
-      const tooltipRefs = [];
+    // --- Настройки подписей по умолчанию (можно менять в UI) ---
+    let MIN_ZOOM = 15;
+    let MAX_LEN  = 28;
 
+    // --- Утилиты ---
+    const escapeHtml = (s) => String(s)
+      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#39;");
+    const ellipsis = (s, n) => s.length > n ? (s.slice(0, n-1) + "…") : s;
+
+    DG.then(function () {
+      const map = DG.map('map', { center: center, zoom: markers.length > 1 ? 13 : 14 });
+      const group = DG.featureGroup().addTo(map);
+
+      // ссылки на { marker, tooltipInstance, dom, fullTitle, shortTitle }
+      const labelItems = [];
+
+      // Создаём маркеры и подписи
       markers.forEach((m) => {
-        const marker = DG.marker([m.lat, m.lon], { title: m.title || "" }).addTo(group);
-        const tt = marker.bindTooltip(m.title || "", {
+        const fullTitle  = m.title || "Организация";
+        const marker     = DG.marker([m.lat, m.lon], { title: fullTitle }).addTo(group);
+        const shortTitle = ellipsis(fullTitle, MAX_LEN);
+
+        // popup с ПОЛНЫМ названием
+        marker.bindPopup(`<b>${escapeHtml(fullTitle)}</b><br/>Координаты: ${m.lat.toFixed(6)}, ${m.lon.toFixed(6)}`);
+
+        // перманентная подпись; покажем/скроем ниже по правилам
+        const tt = marker.bindTooltip(shortTitle, {
           permanent: true, direction: 'top', offset: [0, -10], className: 'place-label'
         });
-        tooltipRefs.push(tt);
-        marker.bindPopup(`<b>${escapeHtml(m.title || "Организация")}</b><br/>Координаты: ${m.lat.toFixed(6)}, ${m.lon.toFixed(6)}`);
+
+        labelItems.push({ marker, tooltip: tt, dom: null, fullTitle, shortTitle });
       });
 
-      if (markers.length > 1) { map.fitBounds(group.getBounds().pad(0.2)); }
-
-      const toggle = document.getElementById("toggleLabels");
-      toggle.addEventListener("change", () => {
-        tooltipRefs.forEach((tt) => {
-          try { toggle.checked ? tt.openTooltip() : tt.closeTooltip(); } catch(e){}
+      // Подписать/пересчитать коллизии
+      function refreshShortTitles() {
+        labelItems.forEach(item => {
+          item.shortTitle = ellipsis(item.fullTitle, MAX_LEN);
+          try { item.tooltip.setContent(item.shortTitle); } catch(e){}
         });
-      });
-
-      function escapeHtml(s) {
-        return String(s)
-          .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
       }
+
+      function updateDomRefs() {
+        // после открытия tooltip у него появляется DOM-элемент
+        labelItems.forEach(item => {
+          try {
+            // tooltip может быть не открыт: откроем, если надо отображать
+            if (!map.hasLayer(item.tooltip._tooltip)) item.tooltip.openTooltip();
+            item.dom = item.tooltip._tooltip?._container || null;
+          } catch(e) { item.dom = null; }
+        });
+      }
+
+      // Простая анти-коллизия: прячем подписи, прямоугольники которых пересекаются
+      function resolveCollisions() {
+        const zoom = map.getZoom();
+        const showLabels = document.getElementById('toggleLabels').checked;
+
+        // Показ по условиям (зум и переключатель)
+        const shouldShow = showLabels && (zoom >= MIN_ZOOM);
+
+        labelItems.forEach(item => {
+          if (!item.dom) return;
+          item.dom.classList.toggle('hidden', !shouldShow);
+        });
+        if (!shouldShow) return; // дальше не считаем пересечения
+
+        // Собираем видимые и сортируем (короче подписи — выше приоритет)
+        const visibles = labelItems
+          .map(x => ({...x, rect: x.dom?.getBoundingClientRect()}))
+          .filter(x => x.rect && !x.dom.classList.contains('hidden'))
+          .sort((a,b) => a.shortTitle.length - b.shortTitle.length);
+
+        const taken = [];
+        for (const it of visibles) {
+          const r = it.rect;
+          let overlap = false;
+          for (const tr of taken) {
+            if (!(r.right < tr.left || r.left > tr.right || r.bottom < tr.top || r.top > tr.bottom)) {
+              overlap = true; break;
+            }
+          }
+          if (overlap) {
+            it.dom.classList.add('hidden');  // прячем пересекающуюся
+          } else {
+            it.dom.classList.remove('hidden');
+            taken.push(r);
+          }
+        }
+      }
+
+      function fullRelayout() {
+        refreshShortTitles();
+        updateDomRefs();
+        resolveCollisions();
+      }
+
+      // Первичная отрисовка
+      if (markers.length > 1) map.fitBounds(group.getBounds().pad(0.2));
+      // Дадим карте дорисоваться, затем сделаем раскладку
+      setTimeout(fullRelayout, 100);
+
+      // Перелайаут при движении/зуме
+      map.on('zoomend moveend', () => setTimeout(fullRelayout, 0));
+
+      // --- UI-переключатели ---
+      const toggle = document.getElementById('toggleLabels');
+      const minZoomSel = document.getElementById('minZoom');
+      const maxLenInp  = document.getElementById('maxLen');
+
+      toggle.addEventListener('change', fullRelayout);
+      minZoomSel.addEventListener('change', () => {
+        MIN_ZOOM = parseInt(minZoomSel.value, 10) || 15;
+        fullRelayout();
+      });
+      maxLenInp.addEventListener('change', () => {
+        const v = Math.max(8, Math.min(80, parseInt(maxLenInp.value, 10) || 28));
+        MAX_LEN = v;
+        maxLenInp.value = v;
+        fullRelayout();
+      });
     });
   </script>
 </body>
