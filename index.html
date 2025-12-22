@@ -58,11 +58,11 @@
             tg.expand();
         }
         
-        // Получаем данные из URL (два формата поддерживаются)
+        // Получаем данные из URL
         function getData() {
             const params = new URLSearchParams(window.location.search);
             
-            // Формат 1: ?data={json}
+            // Формат: ?data={json}
             const dataParam = params.get('data');
             if (dataParam) {
                 try {
@@ -72,7 +72,7 @@
                 }
             }
             
-            // Формат 2: ?center=lat,lon&markers=[{...}]
+            // Формат: ?center=lat,lon&markers=[{...}]
             const center = params.get('center');
             const markers = params.get('markers');
             if (center && markers) {
@@ -123,7 +123,7 @@
                 weight: 3
             }).addTo(map).bindPopup('<b>Вы здесь</b>');
             
-            // Маркеры клиник
+            // Маркеры клиник - используем стандартный маркер DG.marker()
             const markers = [];
             const bounds = [[userLat, userLon]];
             
@@ -141,28 +141,12 @@
                     popupText += '<br><a href="tel:' + clinic.phones[0].replace(/[^\d+]/g, '') + '">📞 ' + clinic.phones[0] + '</a>';
                 }
                 
-                // Красный маркер
-                const marker = DG.marker([clinic.lat, clinic.lon], {
-                    icon: DG.icon({
-                        iconUrl: 'https://maps.api.2gis.ru/2.0/img/cluster-marker.png',
-                        iconSize: [24, 24],
-                        iconAnchor: [12, 24]
-                    })
-                }).addTo(map).bindPopup(popupText);
+                // Стандартный красный маркер 2GIS (без указания icon)
+                const marker = DG.marker([clinic.lat, clinic.lon])
+                    .addTo(map)
+                    .bindPopup(popupText);
                 
                 markers.push(marker);
-                
-                // Подпись (сокращаем длинные названия)
-                const maxLen = 14;
-                const shortName = clinic.name.length > maxLen 
-                    ? clinic.name.substring(0, maxLen) + '…' 
-                    : clinic.name;
-                    
-                DG.divIcon({
-                    className: 'place-label',
-                    html: shortName,
-                    iconSize: null
-                });
             });
             
             // Подгоняем масштаб чтобы все маркеры были видны
