@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Карта клиник и лабораторий</title>
     
-    <!-- Стили для Leaflet (нужны 2ГИС SDK v2) -->
+    <!-- Стили для Leaflet (2ГИС SDK v2) -->
     <link rel="stylesheet" href="https://maps.api.2gis.ru/2.0/leaflet.css" />
     
     <!-- 2ГИС Web SDK -->
@@ -42,9 +42,7 @@
             text-align: center;
         }
         
-        .error {
-            color: #d32f2f;
-        }
+        .error { color: #d32f2f; }
     </style>
 </head>
 <body>
@@ -60,18 +58,39 @@
             tg.expand();
         }
         
-        // Получаем данные из URL
+        // Получаем данные из URL (два формата поддерживаются)
         function getData() {
             const params = new URLSearchParams(window.location.search);
-            const dataParam = params.get('data');
             
+            // Формат 1: ?data={json}
+            const dataParam = params.get('data');
             if (dataParam) {
                 try {
                     return JSON.parse(decodeURIComponent(dataParam));
                 } catch (e) {
-                    console.error('Parse error:', e);
+                    console.error('Parse data error:', e);
                 }
             }
+            
+            // Формат 2: ?center=lat,lon&markers=[{...}]
+            const center = params.get('center');
+            const markers = params.get('markers');
+            if (center && markers) {
+                try {
+                    const [lat, lon] = center.split(',').map(Number);
+                    const clinics = JSON.parse(decodeURIComponent(markers)).map(m => ({
+                        name: m.title || m.name,
+                        address: m.address || '',
+                        lat: m.lat,
+                        lon: m.lon,
+                        phones: m.phones || []
+                    }));
+                    return { userLat: lat, userLon: lon, clinics };
+                } catch (e) {
+                    console.error('Parse center/markers error:', e);
+                }
+            }
+            
             return null;
         }
         
@@ -92,50 +111,63 @@
             // Создаём карту
             const map = DG.map('map', {
                 center: [userLat, userLon],
-                zoom: 14
+                zoom: 13
             });
             
-            // Маркер пользователя
-            DG.marker([userLat, userLon], {
-                icon: DG.icon({
-                    iconUrl: 'https://maps.api.2gis.ru/2.0/img/geolocation.svg',
-                    iconSize: [22, 22]
-                })
+            // Маркер пользователя (синий круг)
+            DG.circleMarker([userLat, userLon], {
+                radius: 10,
+                color: '#2196F3',
+                fillColor: '#2196F3',
+                fillOpacity: 0.8,
+                weight: 3
             }).addTo(map).bindPopup('<b>Вы здесь</b>');
             
             // Маркеры клиник
             const markers = [];
-            clinics.forEach(function(clinic) {
+            const bounds = [[userLat, userLon]];
+            
+            clinics.forEach(function(clinic, index) {
                 if (!clinic.lat || !clinic.lon) return;
                 
+                bounds.push([clinic.lat, clinic.lon]);
+                
                 // Текст попапа
-                let popupText = '<b>' + clinic.name + '</b><br>' + clinic.address;
+                let popupText = '<b>' + clinic.name + '</b>';
+                if (clinic.address) {
+                    popupText += '<br>📍 ' + clinic.address;
+                }
                 if (clinic.phones && clinic.phones.length) {
-                    popupText += '<br><a href="tel:' + clinic.phones[0] + '">' + clinic.phones[0] + '</a>';
+                    popupText += '<br><a href="tel:' + clinic.phones[0].replace(/[^\d+]/g, '') + '">📞 ' + clinic.phones[0] + '</a>';
                 }
                 
-                // Маркер
-                const marker = DG.marker([clinic.lat, clinic.lon])
-                    .addTo(map)
-                    .bindPopup(popupText);
-                
-                // Подпись
-                const shortName = clinic.name.length > 14 
-                    ? clinic.name.substring(0, 14) + '…' 
-                    : clinic.name;
-                    
-                DG.label(shortName, {
-                    static: true,
-                    className: 'place-label'
-                }).setLatLng([clinic.lat, clinic.lon]).addTo(map);
+                // Красный маркер
+                const marker = DG.marker([clinic.lat, clinic.lon], {
+                    icon: DG.icon({
+                        iconUrl: 'https://maps.api.2gis.ru/2.0/img/cluster-marker.png',
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 24]
+                    })
+                }).addTo(map).bindPopup(popupText);
                 
                 markers.push(marker);
+                
+                // Подпись (сокращаем длинные названия)
+                const maxLen = 14;
+                const shortName = clinic.name.length > maxLen 
+                    ? clinic.name.substring(0, maxLen) + '…' 
+                    : clinic.name;
+                    
+                DG.divIcon({
+                    className: 'place-label',
+                    html: shortName,
+                    iconSize: null
+                });
             });
             
-            // Подгоняем масштаб
-            if (markers.length > 0) {
-                const group = DG.featureGroup(markers);
-                map.fitBounds(group.getBounds().pad(0.1));
+            // Подгоняем масштаб чтобы все маркеры были видны
+            if (bounds.length > 1) {
+                map.fitBounds(bounds, { padding: [30, 30] });
             }
         });
     </script>
