@@ -3,32 +3,12 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Карта клиник и лабораторий</title>
-    
-    <!-- Стили для Leaflet (2ГИС SDK v2) -->
+    <title>Карта клиник</title>
     <link rel="stylesheet" href="https://maps.api.2gis.ru/2.0/leaflet.css" />
-    
-    <!-- 2ГИС Web SDK -->
     <script src="https://maps.api.2gis.ru/2.0/loader.js?pkg=full"></script>
-    
-    <!-- Telegram Web App -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    
     <style>
         html, body, #map { height: 100%; margin: 0; }
-        
-        .place-label {
-            background: rgba(255,255,255,0.95);
-            color: #111;
-            border: 1px solid rgba(0,0,0,0.25);
-            border-radius: 6px;
-            padding: 4px 8px;
-            font-size: 11px;
-            font-weight: 500;
-            white-space: nowrap;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-        }
-        
         .loading {
             position: absolute;
             top: 50%;
@@ -41,7 +21,6 @@
             z-index: 1000;
             text-align: center;
         }
-        
         .error { color: #d32f2f; }
     </style>
 </head>
@@ -49,30 +28,40 @@
     <div id="map">
         <div class="loading" id="loading">Загрузка карты...</div>
     </div>
-
     <script>
-        // Telegram WebApp
         const tg = window.Telegram && window.Telegram.WebApp;
-        if (tg) {
-            tg.ready();
-            tg.expand();
-        }
+        if (tg) { tg.ready(); tg.expand(); }
         
-        // Получаем данные из URL
         function getData() {
             const params = new URLSearchParams(window.location.search);
             
-            // Формат: ?data={json}
+            // New compact format: ?d={...}
+            const d = params.get('d');
+            if (d) {
+                try {
+                    const data = JSON.parse(decodeURIComponent(d));
+                    return {
+                        userLat: data.u[0],
+                        userLon: data.u[1],
+                        clinics: data.c.map(c => ({
+                            name: c.n,
+                            address: c.a,
+                            lat: c.lt,
+                            lon: c.ln
+                        }))
+                    };
+                } catch (e) { console.error('Parse d error:', e); }
+            }
+            
+            // Old format: ?data={...}
             const dataParam = params.get('data');
             if (dataParam) {
                 try {
                     return JSON.parse(decodeURIComponent(dataParam));
-                } catch (e) {
-                    console.error('Parse data error:', e);
-                }
+                } catch (e) { console.error('Parse data error:', e); }
             }
             
-            // Формат: ?center=lat,lon&markers=[{...}]
+            // Legacy format: ?center=...&markers=...
             const center = params.get('center');
             const markers = params.get('markers');
             if (center && markers) {
@@ -82,74 +71,46 @@
                         name: m.title || m.name,
                         address: m.address || '',
                         lat: m.lat,
-                        lon: m.lon,
-                        phones: m.phones || []
+                        lon: m.lon
                     }));
                     return { userLat: lat, userLon: lon, clinics };
-                } catch (e) {
-                    console.error('Parse center/markers error:', e);
-                }
+                } catch (e) { console.error('Parse legacy error:', e); }
             }
             
             return null;
         }
         
-        // Инициализация карты
         DG.then(function() {
             const loading = document.getElementById('loading');
             const data = getData();
             
             if (!data || !data.clinics || !data.clinics.length) {
-                loading.innerHTML = '<span class="error">Нет данных для отображения.<br>Откройте карту из бота.</span>';
+                loading.innerHTML = '<span class="error">Нет данных.<br>Откройте карту из бота.</span>';
                 return;
             }
             
             loading.style.display = 'none';
-            
             const { userLat, userLon, clinics } = data;
             
-            // Создаём карту
-            const map = DG.map('map', {
-                center: [userLat, userLon],
-                zoom: 13
-            });
+            const map = DG.map('map', { center: [userLat, userLon], zoom: 13 });
             
-            // Маркер пользователя (синий круг)
+            // User marker
             DG.circleMarker([userLat, userLon], {
-                radius: 10,
-                color: '#2196F3',
-                fillColor: '#2196F3',
-                fillOpacity: 0.8,
-                weight: 3
+                radius: 10, color: '#2196F3', fillColor: '#2196F3', fillOpacity: 0.8, weight: 3
             }).addTo(map).bindPopup('<b>Вы здесь</b>');
             
-            // Маркеры клиник - используем стандартный маркер DG.marker()
-            const markers = [];
+            // Clinic markers
             const bounds = [[userLat, userLon]];
-            
-            clinics.forEach(function(clinic, index) {
+            clinics.forEach(function(clinic) {
                 if (!clinic.lat || !clinic.lon) return;
-                
                 bounds.push([clinic.lat, clinic.lon]);
                 
-                // Текст попапа
-                let popupText = '<b>' + clinic.name + '</b>';
-                if (clinic.address) {
-                    popupText += '<br>📍 ' + clinic.address;
-                }
-                if (clinic.phones && clinic.phones.length) {
-                    popupText += '<br><a href="tel:' + clinic.phones[0].replace(/[^\d+]/g, '') + '">📞 ' + clinic.phones[0] + '</a>';
-                }
+                let popup = '<b>' + clinic.name + '</b>';
+                if (clinic.address) popup += '<br>📍 ' + clinic.address;
                 
-                // Стандартный красный маркер 2GIS (без указания icon)
-                const marker = DG.marker([clinic.lat, clinic.lon])
-                    .addTo(map)
-                    .bindPopup(popupText);
-                
-                markers.push(marker);
+                DG.marker([clinic.lat, clinic.lon]).addTo(map).bindPopup(popup);
             });
             
-            // Подгоняем масштаб чтобы все маркеры были видны
             if (bounds.length > 1) {
                 map.fitBounds(bounds, { padding: [30, 30] });
             }
